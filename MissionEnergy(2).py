@@ -17,7 +17,9 @@ from DroneEnergyModel_Full import evaluate_assignment_with_simulation
 # ---------- 路径 ----------
 BASE_DIR   = Path(__file__).parent
 MAP_CSV    = BASE_DIR / 'nanling_final_matrix.csv'
+# 任务区域中心点
 CENTER_CSV = BASE_DIR / 'task_region_centers.csv'
+
 RISK_CSV   = BASE_DIR / '场景1.csv'
 
 ENERGY_CSV = BASE_DIR / 'result.csv'
@@ -26,7 +28,7 @@ DEPOT_CSV  = BASE_DIR / 'depots_fix.csv'
 BEST_DIR   = BASE_DIR / '最优一代结果'
 BEST_DIR.mkdir(exist_ok=True)
 
-K   = 7
+K   = 6
 GENS = 50
 
 # ---------- 彩色日志 ----------
@@ -36,10 +38,12 @@ def log(msg, color="white"):
 
 # ---------- 数据 ----------
 def load_tasks():
+
     center = pd.read_csv(CENTER_CSV, encoding='utf-8-sig').rename(columns={'task_row': 'row', 'task_col': 'col'})
+    # 场景文件
     risk = pd.read_csv(RISK_CSV, header=0, names=['risk_flag', 'region_id'], encoding='gbk') \
              .fillna(0).astype(int)
-    energy = pd.read_csv(ENERGY_CSV, encoding='gbk')[['id', '区域能耗']]
+    energy = pd.read_csv(ENERGY_CSV, encoding='utf-8')[['id', '区域能耗']]
     task = center.merge(risk, on='region_id') \
                  .merge(energy, left_on='region_id', right_on='id') \
                  .drop_duplicates('region_id')
@@ -101,6 +105,72 @@ def accept(delta, temperature):
     return math.exp(-delta / temperature) > random.random()
 
 
+# 机巢扰动，使用弹簧模型加上边界约束：
+def disturbance(points, T, boundarys = pd.read_csv("boundary_points.csv").values):
+    points = np.array([list(point) for point in points])
+    new_dep = []
+    r_min, r_max, c_min, c_max, elev = get_bounds()
+    for i in range(len(points)):
+        direction = (0, 0)
+        min_distance = float('inf')
+        for j in range(len(points)):
+            if i != j:
+                # 计算点与点之间的力
+                # direction += points[j] - points[i]
+                distance = np.linalg.norm(points[i] - points[j])
+                min_distance = min(distance, min_distance)
+                if min_distance == distance:
+                    min_direction = points[i] - points[j]
+        direction = min_direction * math.exp(-min_distance)
+        # 计算边界的推力，先找到最近的边界点，然后计算距离，如果小于机巢点之间的最小距离的二分之一，则表示机巢点距离边界太近了，计算方向，把距离乘二加入合力。不约束机巢距离边界太远
+        min_distance_boundary = float('inf')
+        for index, boundary in enumerate(boundarys):
+            dis = np.linalg.norm(boundary - points[i])
+            if dis < min_distance_boundary:
+                min_distance_boundary = dis
+                min_index = index
+        if min_distance/2 < min_distance_boundary:
+            direction += (boundarys[min_index] - points[i]) * math.exp(-min_distance/2) * 2
+        else:
+            direction += (points[i] - boundarys[min_index]) * math.exp(-min_distance_boundary) * 2
+        norm = np.linalg.norm(direction)
+        direction_norm = direction / norm
+
+
+        radius = int(T)
+        dr = random.randint(0, radius)
+
+        new_r = max(r_min, min(r_max, int(points[i][0] + dr * direction_norm[0])))
+        new_c = max(c_min, min(c_max, int(points[i][1] + dr * direction_norm[1])))
+        # 若越界或-999，则小范围位移
+        while not (r_min <= new_r <= r_max and c_min <= new_c <= c_max) or elev[new_r, new_c] == -999:
+            if new_r < r_min:
+                new_r = r_max
+            if new_c < c_min:
+                 new_c = c_max
+            if new_r > r_max:
+                new_r = r_min
+            if new_c > c_max:
+                new_c = c_min
+            if elev[new_r, new_c] == -999:
+                new_r += 1
+                new_c += 1
+        new_dep.append((new_r, new_c))
+    return new_dep
+
+
+# 成本收敛曲线
+def plot_score(scores):
+    # 绘制成本收敛图
+    plt.plot(scores)
+    plt.xlabel("Iteration")
+    plt.ylabel("Cost")
+    plt.title("Simulated Annealing Cost Convergence")
+    plt.savefig("cost.png")
+    plt.show()
+
+
+
 # ---------- 主 ----------
 def main():
     tasks  = load_tasks()
@@ -108,7 +178,10 @@ def main():
 
     # 初始机巢（落在高程有效区）
     depots = [random_valid_coord(r_min, r_max, c_min, c_max, elev) for _ in range(K)]
-    best_score = float('inf'); best_dep = depots.copy()
+    # depots = [(round((r_min + r_max)/2), round((c_min + c_max)/2)) for _ in range(K)]
+    # depots = [(r_min, c_min) for _ in range(K)]
+    print("初始机巢解", depots)
+    best_score = float('inf'); best_dep = depots.copy(); best_dep_result = depots.copy()
     # 模拟退火算法 温度 衰退率
     T = 100
     t_l = 0.98
@@ -120,23 +193,18 @@ def main():
         total_iterations += 1
     GENS = total_iterations
 
+    # 模拟退火算法的收敛
+    scores = []
+
+
     pbar = tqdm(range(1, GENS + 1), desc='VNS')
     for gen in pbar:
-        candidates = [best_dep]
+        candidates = []
         for _ in range(5):
-            new_dep = []
-            # radiuses = [20, 40, 80]
-            radius = 100
-            for (r, c) in best_dep:
-                dr = random.randint(-radius, radius)
-                dc = random.randint(-radius, radius)
-                new_r = max(r_min, min(r_max, r + dr))
-                new_c = max(c_min, min(c_max, c + dc))
-                # 若越界或-999，重新随机
-                if not (r_min <= new_r <= r_max and c_min <= new_c <= c_max) or elev[new_r, new_c] == -999:
-                    new_r, new_c = random_valid_coord(r_min, r_max, c_min, c_max, elev)
-                new_dep.append((new_r, new_c))
+            # 机巢扰动
+            new_dep = disturbance(best_dep, T)
             candidates.append(new_dep)
+        log(f"candidates:{candidates}")
 
         best_gen = None; best_gen_score = float('inf')
         for cand in candidates:
@@ -157,28 +225,31 @@ def main():
             )
             if score_norm < best_gen_score:
                 best_gen_score, best_gen = score_norm, cand
-            # 在概率下接收差解
+                best_t, best_e, best_s = t, e, s
             # else:
             #     if accept(score_norm - best_gen_score, T):
             #         best_gen_score, best_gen = score_norm, cand
             #         log(f"[Gen {gen:02d}] 🎯 接受劣解！得分={best_gen_score:.4f}", "green")
             # shutil.rmtree(tmp, ignore_errors=True)
+            log(f"[Gen {gen:02d}] 飞行时间负载={t}s  能耗={e:,.0f}J  架次={s} 得分={score_norm:.4f}", "green")
 
         if best_gen_score < best_score:
             best_score, best_dep = best_gen_score, best_gen
+            best_dep_result = best_dep
             log(f"[Gen {gen:02d}] 🎯 更新最优解！得分={best_score:.4f}", "green")
         else:
             if accept(best_gen_score - best_score, T):
                 best_score, best_dep = best_gen_score, best_gen
                 log(f"[Gen {gen:02d}] 🎯 接受劣解！得分={best_gen_score:.4f}", "green")
-        log(f"[Gen {gen:02d}] 目标={best_gen_score:.4f}  "
-            f"飞行={t:,.0f}s  能耗={e:,.0f}J  架次={s}  当前温度={T}", "yellow")
-        pbar.set_postfix({'best': f'{best_score:.4f}'})
+        log(f"[Gen {gen:02d}] 目标={best_score:.4f}  "
+            f"飞行时间负载={best_t}s  能耗={best_e:,.0f}J  架次={best_s}  当前温度={T}", "yellow")
+        scores.append(best_score)
         T = T*t_l
 
     # 最终文件 & 日志 & 3D
-    assign = assign_nearest(tasks, best_dep)
-    pd.DataFrame(best_dep, columns=['row', 'col']).assign(depot_id=range(1, K + 1)) \
+    # 使用best_dep_result保存真正的最佳结果
+    assign = assign_nearest(tasks, best_dep_result)
+    pd.DataFrame(best_dep_result, columns=['row', 'col']).assign(depot_id=range(1, K + 1)) \
         .to_csv(DEPOT_CSV, index=False)
     pd.DataFrame({
         'region_id': tasks['region_id'],
@@ -192,8 +263,11 @@ def main():
         DEPOT_CSV,
         output_dir=BEST_DIR
     )
-    plot_3d_solution(best_dep, tasks, assign)
-    log(f"✅ 完成，最优得分={best_score:.4f}", "green")
+    plot_3d_solution(best_dep_result, tasks, assign)
+
+    plot_score(scores)
+    t, e, s, score_norm = evaluate_assignment_with_simulation('assignment_fix.csv', 'depots_fix.csv')
+    log(f"✅ 完成，最优得分={score_norm:.4f}  飞行时间负载={t}s  能耗={e:,.0f}J  架次={s}", "green")
 
 if __name__ == '__main__':
     main()

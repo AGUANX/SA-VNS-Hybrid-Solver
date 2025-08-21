@@ -37,11 +37,13 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
                                       depot_csv: Path,
                                       output_dir: Path = None):
     # ---------- 原有加载 ----------
+    # dem数据
     elev_arr   = np.loadtxt(BASE_DIR / 'nanling_final_matrix.csv', delimiter=',')
     assign_df  = pd.read_csv(assign_csv)
-    assign_df['depot_id'] = assign_df['depot_id'].replace(0, 6)
+    # assign_df['depot_id'] = assign_df['depot_id'].replace(0, 6)
     depots_df  = pd.read_csv(depot_csv)
     depots_df['depot_id'] = depots_df.index + 1
+    # 任务区域大小
     region_map = joblib.load(BASE_DIR / 'region_grid_map.pkl')
     risk_df = pd.read_csv(
         BASE_DIR / '场景1.csv',
@@ -66,6 +68,7 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
         return dxy * H_RATE + h_energy
     def get_pixels(region_id):
         return [region_map[k] for k in region_map.keys() if k[0] == region_id]
+    # 生成任务区域路径
     def boustrophedon(mask):
         path = []
         for i in range(mask.shape[0]):
@@ -83,8 +86,11 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
         task_c = int(row['task_col'])
         depot_regions.setdefault(depot_id, []).append((region_id, task_r, task_c))
 
+    # 每个机巢时间列表
     total_time_sec_list = []
+    # 能耗
     total_energy_j = 0
+    # 轮次
     total_sorties  = 0
     now = datetime(2025, 7, 28, 8, 0, 0)
 
@@ -107,6 +113,7 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
 
     # ---------- 主循环 ----------
     for depot_id, region_list in depot_regions.items():
+        # 统计单个机巢时间
         total_time_sec = 0
         nest_r = int(depots_df.loc[depot_id - 1, 'row'])
         nest_c = int(depots_df.loc[depot_id - 1, 'col'])
@@ -136,7 +143,7 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
                 total_sorties += 1
                 add_event(depot_id, 'takeoff', nest_r, nest_c, total_energy, total_energy_j, total_time_sec)
 
-                # 前往任务区
+                # 前往任务区中心点
                 e_entry = energy((current_r, current_c), (task_r, task_c))
                 t_entry = e_entry / SPEED_MPS
                 now += timedelta(seconds=t_entry)
@@ -156,12 +163,15 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
                     total_energy_j += e_back
                     add_event(depot_id, 'return_charge', nest_r, nest_c, total_energy - e_back, total_energy_j, total_time_sec)
 
+                    # 计算充电时间
                     charge_sec = max((BATTERY_J - (total_energy - e_back)) / (BATTERY_J * 0.8) * CHARGE_FULL_SEC, 0)
                     now += timedelta(seconds=charge_sec)
                     total_time_sec += charge_sec
                     add_event(depot_id, 'finish_charge', nest_r, nest_c, BATTERY_J, total_energy_j, total_time_sec)
 
-                    total_energy = BATTERY_J
+                    # 返回返航点
+                    e_go = energy((nest_r, nest_c), (current_r, current_c))
+                    total_energy = BATTERY_J - e_go
                     sortie += 1
                     total_sorties += 1
                     add_event(depot_id, 'takeoff', nest_r, nest_c, total_energy, total_energy_j, total_time_sec)
@@ -187,7 +197,9 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
                         total_time_sec += charge_sec
                         add_event(depot_id, 'finish_charge', nest_r, nest_c, BATTERY_J, total_energy_j, total_time_sec)
 
-                        total_energy = BATTERY_J
+                        # 返回返航点
+                        e_go = energy((nest_r, nest_c), (current_r, current_c))
+                        total_energy = BATTERY_J - e_go
                         sortie += 1
                         total_sorties += 1
                         add_event(depot_id, 'takeoff', nest_r, nest_c, total_energy, total_energy_j, total_time_sec)
@@ -213,13 +225,13 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
 
     # ---------- 归一化 ----------
     max_time_sec = max(total_time_sec_list)
-    norm_time = min(max_time_sec / MAX_TIME, 1.0)
+    min_time_sec = min(total_time_sec_list)
     # norm_energy = min(total_energy_j / MAX_ENERGY, 1.0)
-    # norm_sortie = min(total_sorties / MAX_SORTIE, 1.0)
-    # w_sum = WEIGHT_TIME + WEIGHT_ENERGY + WEIGHT_SORTIE
+    # norm_sortie = min(total_sorties / MAX_SORTIE, 1.0)d
     norm_energy = total_energy_j * 0.5 / 3600000
-    norm_sortie = total_sorties * 2.5
-    score_norm = norm_time * norm_energy
+    # norm_sortie = total_sorties * 2.5
+    time_rate = float(max_time_sec / min_time_sec)
+    score_norm = (norm_energy + total_sorties / 100) * time_rate
 
     # ---------- 输出 ----------
     if output_dir:
@@ -233,4 +245,4 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
             f.write(f"Total sorties: {total_sorties}\n")
             f.write(f"Normalized score: {score_norm}\n")
 
-    return max_time_sec, total_energy_j, total_sorties, score_norm
+    return time_rate, total_energy_j, total_sorties, score_norm
