@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+
+from statsmodels.nonparametric.kdetools import counts
 from tqdm import tqdm
 import seaborn as sns
 from datetime import datetime
@@ -20,7 +22,7 @@ MAP_CSV    = BASE_DIR / 'nanling_final_matrix.csv'
 # 任务区域中心点
 CENTER_CSV = BASE_DIR / 'task_region_centers.csv'
 
-RISK_CSV   = BASE_DIR / '场景1.csv'
+RISK_CSV   = BASE_DIR / '场景'
 
 ENERGY_CSV = BASE_DIR / 'result.csv'
 ASSIGN_CSV = BASE_DIR / 'assignment_fix.csv'
@@ -36,12 +38,12 @@ def log(msg, color="white"):
     colors = {"red": 91, "green": 92, "yellow": 93, "blue": 94, "magenta": 95}
     print(f"\033[{colors.get(color, 97)}m{msg}\033[0m")
 
-# ---------- 数据 ----------
+# 读取地形数据等
 def load_tasks():
 
     center = pd.read_csv(CENTER_CSV, encoding='utf-8-sig').rename(columns={'task_row': 'row', 'task_col': 'col'})
     # 场景文件
-    risk = pd.read_csv(RISK_CSV, header=0, names=['risk_flag', 'region_id'], encoding='gbk') \
+    risk = pd.read_csv('./场景/场景_with_flag0.csv', header=0, names=['risk_flag', 'region_id'], encoding='utf-8') \
              .fillna(0).astype(int)
     energy = pd.read_csv(ENERGY_CSV, encoding='utf-8')[['id', '区域能耗']]
     task = center.merge(risk, on='region_id') \
@@ -141,11 +143,23 @@ def compute_depot(cand, tasks):
         'task_col': tasks['col']
     }).to_csv(tmp / 'assignment_fix.csv', index=False, encoding='utf-8-sig')
 
-    t, e, s, score_norm, max_time = evaluate_assignment_with_simulation(
-        tmp / 'assignment_fix.csv',
-        tmp / 'depots_fix.csv'
-    )
-    return t, e, s, score_norm, max_time
+    count_t, count_e, count_s, count_score_norm = 0, 0, 0, 0
+    max_time_list = []
+    files = os.listdir(RISK_CSV)
+    for file_name in files:
+        file_path = os.path.join(RISK_CSV, file_name)
+        t, e, s, score_norm, max_t = evaluate_assignment_with_simulation(
+            file_path,
+            tmp / 'assignment_fix.csv',
+            tmp / 'depots_fix.csv'
+        )
+        count_t += t
+        count_e += e
+        count_s += s
+        count_score_norm += score_norm
+        max_time_list.append(max_t)
+
+    return count_t / len(files), count_e / len(files), count_s / len(files), count_score_norm / len(files), max_time_list
 
 
 # 成本收敛曲线
@@ -162,7 +176,7 @@ def plot_score(scores):
 
 # ---------- 主 ----------
 def main():
-    tasks  = load_tasks()
+    tasks = load_tasks()
     r_min, r_max, c_min, c_max, elev = get_bounds()
 
     # 初始机巢（落在高程有效区）

@@ -1,4 +1,5 @@
 # DroneEnergyModel_Full.py
+import os
 from pathlib import Path
 from datetime import datetime, timedelta
 import numpy as np
@@ -35,7 +36,7 @@ MAX_SORTIE = 500            # 500 次
 BASE_DIR = Path(__file__).parent
 
 # ---------- 替换整个 evaluate_assignment_with_simulation ----------
-def evaluate_assignment_with_simulation(assign_csv: Path,
+def evaluate_assignment_with_simulation(file_path, assign_csv: Path,
                                       depot_csv: Path,
                                       output_dir: Path = None):
     # ---------- 原有加载 ----------
@@ -47,10 +48,12 @@ def evaluate_assignment_with_simulation(assign_csv: Path,
     depots_df['depot_id'] = depots_df.index + 1
     # 任务区域大小
     region_map = joblib.load(BASE_DIR / 'region_grid_map.pkl')
+
+    # 场景文件
     risk_df = pd.read_csv(
-        BASE_DIR / '场景1.csv',
-        usecols=[0, 1], names=['risk_flag', 'region_id'],
-        skiprows=1, encoding='gbk'
+        file_path,
+        usecols=[9, 10], names=['risk_flag', 'region_id'],
+        skiprows=1, encoding='utf-8'
     ).astype({'risk_flag': int, 'region_id': int})
     high_risk_regions = set(risk_df[risk_df['risk_flag'] > 0]['region_id'])
 
