@@ -5,6 +5,8 @@ import math
 import os
 import random
 import shutil
+import time
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -30,7 +32,7 @@ DEPOT_CSV  = BASE_DIR / 'depots_fix.csv'
 BEST_DIR   = BASE_DIR / '最优一代结果'
 BEST_DIR.mkdir(exist_ok=True)
 
-K   = 6
+K   =  6
 GENS = 50
 
 # ---------- 彩色日志 ----------
@@ -43,13 +45,14 @@ def load_tasks():
 
     center = pd.read_csv(CENTER_CSV, encoding='utf-8-sig').rename(columns={'task_row': 'row', 'task_col': 'col'})
     # 场景文件
-    risk = pd.read_csv('./场景/场景_with_flag0.csv', header=0, names=['risk_flag', 'region_id'], encoding='utf-8') \
+    risk = pd.read_csv('./场景/聚类月份0.csv', usecols=['rick_level', 'region_id'], encoding='utf-8') \
              .fillna(0).astype(int)
     energy = pd.read_csv(ENERGY_CSV, encoding='utf-8')[['id', '区域能耗']]
+    # 合并有问题
     task = center.merge(risk, on='region_id') \
                  .merge(energy, left_on='region_id', right_on='id') \
                  .drop_duplicates('region_id')
-    task['risk_weight'] = np.where(task['risk_flag'] > 0, 2, 1)
+    task['risk_weight'] = np.where(task['rick_level'] > 0, 2, 1)
     return task[['region_id', 'row', 'col', '区域能耗', 'risk_weight']]
 
 # ---------- 有效边界 ----------
@@ -131,7 +134,7 @@ def disturbance(points):
     return new_dep
 
 # 输入机巢布局，输出t, e, s, score_norm、
-def compute_depot(cand, tasks):
+def compute_depot(cand, tasks, file_name):
     tmp = BEST_DIR / '_tmp';tmp.mkdir(exist_ok=True)
     pd.DataFrame(cand, columns=['row', 'col']).assign(depot_id=range(1, K + 1)) \
         .to_csv(tmp / 'depots_fix.csv', index=False)
@@ -145,19 +148,33 @@ def compute_depot(cand, tasks):
 
     count_t, count_e, count_s, count_score_norm = 0, 0, 0, 0
     max_time_list = []
-    files = os.listdir(RISK_CSV)
-    for file_name in files:
-        file_path = os.path.join(RISK_CSV, file_name)
-        t, e, s, score_norm, max_t = evaluate_assignment_with_simulation(
-            file_path,
-            tmp / 'assignment_fix.csv',
-            tmp / 'depots_fix.csv'
-        )
-        count_t += t
-        count_e += e
-        count_s += s
-        count_score_norm += score_norm
-        max_time_list.append(max_t)
+    # 不确定模型
+    # files = os.listdir(RISK_CSV)
+    # for file_name in files:
+    #     file_path = os.path.join(RISK_CSV, file_name)
+    #     t, e, s, score_norm, max_t = evaluate_assignment_with_simulation(
+    #         file_path,
+    #         tmp / 'assignment_fix.csv',
+    #         tmp / 'depots_fix.csv'
+    #     )
+    #     count_t += t
+    #     count_e += e
+    #     count_s += s
+    #     count_score_norm += score_norm
+    #     max_time_list.append(max_t)
+    # 确定模型
+    files = [1]
+    file_path = os.path.join(RISK_CSV, file_name)
+    t, e, s, score_norm, max_t = evaluate_assignment_with_simulation(
+        file_path,
+        tmp / 'assignment_fix.csv',
+        tmp / 'depots_fix.csv'
+    )
+    count_t += t
+    count_e += e
+    count_s += s
+    count_score_norm += score_norm
+    max_time_list.append(max_t)
 
     return count_t / len(files), count_e / len(files), count_s / len(files), count_score_norm / len(files), max_time_list
 
@@ -175,14 +192,14 @@ def plot_score(scores):
 
 
 # ---------- 主 ----------
-def main():
+def main(file_name):
     tasks = load_tasks()
     r_min, r_max, c_min, c_max, elev = get_bounds()
 
     # 初始机巢（落在高程有效区）
     depots = [random_valid_coord(r_min, r_max, c_min, c_max, elev) for _ in range(K)]
     print("初始机巢解", depots)
-    best_t, best_e, best_s, best_score, max_time = compute_depot(depots, tasks); best_dep = depots.copy(); best_dep_result = depots.copy()
+    best_t, best_e, best_s, best_score, max_time = compute_depot(depots, tasks, file_name); best_dep = depots.copy(); best_dep_result = depots.copy()
 
     # 模拟退火算法的收敛
     scores = []
@@ -199,7 +216,7 @@ def main():
         new_dep = disturbance(best_dep)
         log(f"candidates:{new_dep}")
 
-        t, e, s, score_norm, time = compute_depot(new_dep, tasks)
+        t, e, s, score_norm, time = compute_depot(new_dep, tasks, file_name)
 
         if score_norm < best_score:
             best_t, best_e, best_s, best_score, best_dep, max_time = t, e, s, score_norm, new_dep, time
@@ -217,26 +234,32 @@ def main():
     # 使用best_dep_result保存真正的最佳结果
     assign = assign_nearest(tasks, best_dep)
     pd.DataFrame(best_dep, columns=['row', 'col']).assign(depot_id=range(1, K + 1)) \
-        .to_csv(DEPOT_CSV, index=False)
+        .to_csv(BASE_DIR / file_name, index=False)
     pd.DataFrame({
         'region_id': tasks['region_id'],
         'depot_id': assign + 1,
         'task_row': tasks['row'],
         'task_col': tasks['col']
     }).to_csv(ASSIGN_CSV, index=False, encoding='utf-8-sig')
+    # DEPOT_CSV
 
-    evaluate_assignment_with_simulation(
-        ASSIGN_CSV,
-        DEPOT_CSV,
-        output_dir=BEST_DIR
-    )
-    plot_3d_solution(best_dep, tasks, assign)
-
-    plot_score(scores)
+    # evaluate_assignment_with_simulation(
+    #     ASSIGN_CSV,
+    #     DEPOT_CSV,
+    #     output_dir=BEST_DIR
+    # )
+    # plot_3d_solution(best_dep, tasks, assign)
+    #
+    # plot_score(scores)
     log(f"✅ 完成，最优得分={best_score:.4f}  飞行时间负载={best_t}s  能耗={best_e:,.0f}J  架次={best_s}", "green")
 
 if __name__ == '__main__':
-    main()
+    start_time = time.time()  # 程序开始时间
+    files = os.listdir(RISK_CSV)
+    for file_name in files:
+        main(file_name)
+    end_time = time.time()  # 程序结束时间
+    print("运行时间", end_time - start_time)
 
 
 

@@ -52,9 +52,12 @@ def evaluate_assignment_with_simulation(file_path, assign_csv: Path,
     # 场景文件
     risk_df = pd.read_csv(
         file_path,
-        usecols=[9, 10], names=['risk_flag', 'region_id'],
-        skiprows=1, encoding='utf-8'
-    ).astype({'risk_flag': int, 'region_id': int})
+        usecols=['region_id', 'rick_level'],  # 仅选这两列
+        encoding='utf-8'
+    ).astype({'region_id': int, 'rick_level': int})
+
+    # 如果想把 'rick_level' 重命名为 'risk_flag'
+    risk_df = risk_df.rename(columns={'rick_level': 'risk_flag'})
     high_risk_regions = set(risk_df[risk_df['risk_flag'] > 0]['region_id'])
 
     ROWS, COLS = elev_arr.shape
