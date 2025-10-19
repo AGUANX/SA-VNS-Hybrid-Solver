@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import joblib
+from id_rotated import rotated_calculate
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
@@ -77,8 +78,11 @@ def evaluate_assignment_with_simulation(file_path, assign_csv: Path,
     def get_pixels(region_id):
         return [region_map[k] for k in region_map.keys() if k[0] == region_id]
     # 生成任务区域路径
-    def boustrophedon(mask):
+    # 改成旋转牛耕法
+    def boustrophedon(mask, region_id):
         path = []
+        row_i = pd.read_csv('rotated_data.csv', skiprows=1, nrows=1, header=None).iloc[0]
+        angle = row_i[1]
         for i in range(mask.shape[0]):
             idx = list(np.where(mask[i, :])[0])
             if not idx: continue
@@ -145,7 +149,7 @@ def evaluate_assignment_with_simulation(file_path, assign_csv: Path,
                 mask = np.zeros((max_r - min_r + 1, max_c - min_c + 1), bool)
                 for r, c, _ in pixels:
                     mask[r - min_r, c - min_c] = True
-                path_local = boustrophedon(mask)
+                path_local = boustrophedon(mask, region_id)
 
                 # 起飞（或再起飞）
                 sortie += 1
@@ -184,41 +188,42 @@ def evaluate_assignment_with_simulation(file_path, assign_csv: Path,
                     total_sorties += 1
                     add_event(depot_id, 'takeoff', nest_r, nest_c, total_energy, total_energy_j, total_time_sec)
 
-                # 拍照路径
-                idx = 0
-                while idx < len(path_local):
-                    next_r = path_local[idx][0] + min_r
-                    next_c = path_local[idx][1] + min_c
-                    e_seg, t_seg = energy((current_r, current_c), (next_r, next_c))
-                    remaining = total_energy - e_seg
-                    if remaining < BATTERY_J * 0.2:
-                        # 需返航充电
+                row_i = pd.read_csv('rotated_data.csv', skiprows=region_id, nrows=1, header=None).iloc[0]
+                if total_energy - row_i[1] > BATTERY_J * 0.2:
+                    total_energy -= row_i[1]
+                    total_energy_j += row_i[1]
+                    total_time_sec += row_i[4]
+                    add_event(depot_id, 'rotated_work', current_r, current_c, total_energy, total_energy_j, total_time_sec)
+                else:
+                    back = rotated_calculate(region_id, total_energy)
+
+                    total_energy -= row_i[1]
+                    total_energy_j += row_i[1]
+                    total_time_sec += row_i[4]
+                    add_event(depot_id, 'rotated_work', current_r, current_c, total_energy, total_energy_j, total_time_sec)
+                    for i in range(len(back)):
+                        # 返航充电
                         e_back, t_back = energy((current_r, current_c), (nest_r, nest_c))
                         now += timedelta(seconds=t_back)
                         total_time_sec += t_back
                         total_energy_j += e_back
-                        add_event(depot_id, 'return_charge', nest_r, nest_c, total_energy - e_back, total_energy_j, total_time_sec)
+                        add_event(depot_id, 'return_charge', nest_r, nest_c, BATTERY_J * 0.2 - e_back, total_energy_j,
+                                  total_time_sec)
 
-                        charge_sec = max((BATTERY_J - (total_energy - e_back)) / (BATTERY_J * 0.8) * CHARGE_FULL_SEC, 0)
+                        # 计算充电时间
+                        charge_sec = max((BATTERY_J * 0.2 - - e_back) / (BATTERY_J * 0.8) * CHARGE_FULL_SEC, 0)
                         now += timedelta(seconds=charge_sec)
                         total_time_sec += charge_sec
                         add_event(depot_id, 'finish_charge', nest_r, nest_c, BATTERY_J, total_energy_j, total_time_sec)
 
                         # 返回返航点
                         e_go, t_go = energy((nest_r, nest_c), (current_r, current_c))
-                        total_time_sec += t_go
                         total_energy = BATTERY_J - e_go
+                        total_time_sec += t_go
                         sortie += 1
                         total_sorties += 1
                         add_event(depot_id, 'takeoff', nest_r, nest_c, total_energy, total_energy_j, total_time_sec)
-                        continue
 
-                    total_energy -= e_seg
-                    current_r, current_c = next_r, next_c
-                    idx += 1
-                    total_time_sec += t_seg
-                    total_energy_j += e_seg
-                    add_event(depot_id, 'photo_point', current_r, current_c, total_energy, total_energy_j, total_time_sec)
 
                 # 返航
                 e_back, t_back = energy((current_r, current_c), (nest_r, nest_c))
