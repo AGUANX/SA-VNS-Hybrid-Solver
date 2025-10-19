@@ -106,7 +106,7 @@ def energy(dx, dy, dz):
     return dxy * H_RATE + h_energy
 
 
-def calculate_path(path, hight, energy):
+def calculate_path(path, hight, t_energy):
     if not path:
         return 0
     total = 0.0
@@ -121,7 +121,7 @@ def calculate_path(path, hight, energy):
         dz = z2 - z1
         return_total = energy(dx, dy, dz)
         total += return_total
-        if total >= (energy - BATTERY_J * 0.2):
+        if total >= (t_energy - BATTERY_J * 0.2):
             back.append(path[k])
         total = return_total
 

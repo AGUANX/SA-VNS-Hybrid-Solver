@@ -189,17 +189,18 @@ def evaluate_assignment_with_simulation(file_path, assign_csv: Path,
                     add_event(depot_id, 'takeoff', nest_r, nest_c, total_energy, total_energy_j, total_time_sec)
 
                 row_i = pd.read_csv('rotated_data.csv', skiprows=region_id, nrows=1, header=None).iloc[0]
-                if total_energy - row_i[1] > BATTERY_J * 0.2:
-                    total_energy -= row_i[1]
-                    total_energy_j += row_i[1]
-                    total_time_sec += row_i[4]
+                if total_energy - row_i[2] > BATTERY_J * 0.2:
+                    total_energy -= row_i[2]
+                    total_energy_j += row_i[2]
+                    total_time_sec += row_i[5]
                     add_event(depot_id, 'rotated_work', current_r, current_c, total_energy, total_energy_j, total_time_sec)
+
                 else:
                     back = rotated_calculate(region_id, total_energy)
 
-                    total_energy -= row_i[1]
-                    total_energy_j += row_i[1]
-                    total_time_sec += row_i[4]
+                    total_energy -= row_i[2]
+                    total_energy_j += row_i[2]
+                    total_time_sec += row_i[5]
                     add_event(depot_id, 'rotated_work', current_r, current_c, total_energy, total_energy_j, total_time_sec)
                     for i in range(len(back)):
                         # 返航充电
