@@ -1,5 +1,0 @@
-=== Mission Summary ===
-Total time (s): 2444995.6081725853
-Total energy (J): 98196958.20792557
-Total sorties: 405
-Normalized score: 134.4925727577029
